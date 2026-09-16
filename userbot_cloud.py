@@ -28,7 +28,7 @@ API_ID = int(os.environ.get("API_ID", "0"))
 API_HASH = os.environ.get("API_HASH", "")
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 SESSION = os.environ.get("AGET_SESSION", "")
-MODEL = os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-4-5")
+MODEL = os.environ.get("ANTHROPIC_MODEL", "claude-3-5-haiku-latest")  # дёшево
 DIGEST_HOUR = int(os.environ.get("DIGEST_HOUR", "9"))
 DIGEST_TZ = os.environ.get("DIGEST_TZ", "America/New_York")
 PORT = int(os.environ.get("PORT", "10000"))
@@ -96,16 +96,13 @@ def run_http():
 
 
 async def on_channel(event):
+    # ДЁШЕВО: Claude на каждый пост НЕ зовём. Просто копим сырой текст.
     text = event.raw_text or ""
     if not text.strip():
         return
     chat = await event.get_chat()
     chan = getattr(chat, "title", None) or getattr(chat, "username", None) or "канал"
-    loop = asyncio.get_running_loop()
-    note = await loop.run_in_executor(None, call_claude, LEARN_SYSTEM, text, 800)
-    if "НЕТ ПОЛЕЗНОГО" in note or note.startswith("[Ошибка"):
-        return
-    today_notes.append(f"[{chan}]\n{note}")
+    today_notes.append(f"[{chan}] {text.strip()[:1500]}")
     print(f"+ collected from {chan}", flush=True)
 
 
