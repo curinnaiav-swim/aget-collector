@@ -67,7 +67,11 @@ LEARN_SOURCES = [
 ]
 
 today_notes = []
+family_notes = []       # сообщения из семейной группы (я + папа)
 client = None  # создаётся внутри main(), когда уже есть цикл событий
+
+# Семейные группы для чтения (по ТОЧНОМУ названию, регистр не важен)
+FAMILY_TITLES = ["aget family"]
 
 LEARN_SYSTEM = (
     "Ты — методист по SMM и ИИ. Тебе дают новый пост из Telegram-канала про соцсети/ИИ. "
@@ -126,6 +130,17 @@ async def on_channel(event):
     print(f"+ collected from {chan}", flush=True)
 
 
+async def on_family(event):
+    # Семейный чат (я + папа): копим сырой текст для отдельного письма [AGET-FAMILY].
+    text = event.raw_text or ""
+    if not text.strip():
+        return
+    sender = await event.get_sender()
+    who = getattr(sender, "first_name", None) or "автор"
+    family_notes.append(f"{who}: {text.strip()[:2000]}")
+    print(f"+ family msg from {who}", flush=True)
+
+
 async def digest_loop():
     try:
         from zoneinfo import ZoneInfo
@@ -161,6 +176,18 @@ async def digest_loop():
             except Exception as e2:
                 print("tg fallback error:", e2, flush=True)
 
+        # Отдельное письмо по семейному чату (я + папа)
+        if family_notes:
+            fam_body = (f"Сообщений в семейном чате за сутки: {len(family_notes)}\n\n"
+                        + "\n\n— — —\n\n".join(family_notes))
+            family_notes.clear()
+            try:
+                await loop.run_in_executor(
+                    None, send_email, f"[AGET-FAMILY] чат за сутки {date}", fam_body)
+                print("family emailed", flush=True)
+            except Exception as e:
+                print("family email error:", e, flush=True)
+
 
 async def main():
     global client
@@ -174,10 +201,21 @@ async def main():
         except Exception as e:
             print(f"skip source {s}: {e}", flush=True)
 
+    # семейные группы — ищем по названию среди диалогов
+    family = []
+    wanted = [t.strip().lower() for t in FAMILY_TITLES]
+    async for d in client.iter_dialogs():
+        title = (getattr(d, "name", "") or "").strip().lower()
+        if title in wanted:
+            family.append(d.entity)
+            print(f"family group found: {d.name}", flush=True)
+
     client.add_event_handler(on_channel, events.NewMessage(chats=resolved))
+    if family:
+        client.add_event_handler(on_family, events.NewMessage(chats=family))
     asyncio.create_task(digest_loop())
-    print(f"AGET cloud collector running. Sources: {len(resolved)}. "
-          f"Digest at {DIGEST_HOUR}:00 {DIGEST_TZ}.", flush=True)
+    print(f"AGET cloud collector running. Sources: {len(resolved)}, "
+          f"family groups: {len(family)}. Digest at {DIGEST_HOUR}:00 {DIGEST_TZ}.", flush=True)
     await client.run_until_disconnected()
 
 
