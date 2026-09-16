@@ -7,9 +7,9 @@ AGET Cloud Collector — круглосуточный сбор из Telegram-к�
 - разбирает новые посты через Claude,
 - раз в день в 9:00 (Нью-Йорк) шлёт дайджест тебе в «Избранное».
 
-Все секреты — из переменных окружения (ставятся на сервере):
-  API_ID, API_HASH, ANTHROPIC_API_KEY, AGET_SESSION  (строка-сессия из make_session.py)
-Опционально: DIGEST_HOUR (по умолч. 9), DIGEST_TZ (America/New_York), PORT (даёт Render).
+Секреты — из переменных окружения на сервере:
+  API_ID, API_HASH, ANTHROPIC_API_KEY, AGET_SESSION
+Опц.: DIGEST_HOUR (9), DIGEST_TZ (America/New_York), PORT (даёт Render).
 """
 
 import os
@@ -47,6 +47,7 @@ LEARN_SOURCES = [
 ]
 
 today_notes = []
+client = None  # создаётся внутри main(), когда уже есть цикл событий
 
 LEARN_SYSTEM = (
     "Ты — методист по SMM и ИИ. Тебе дают новый пост из Telegram-канала про соцсети/ИИ. "
@@ -94,7 +95,18 @@ def run_http():
     HTTPServer(("0.0.0.0", PORT), Ping).serve_forever()
 
 
-client = TelegramClient(StringSession(SESSION), API_ID, API_HASH)
+async def on_channel(event):
+    text = event.raw_text or ""
+    if not text.strip():
+        return
+    chat = await event.get_chat()
+    chan = getattr(chat, "title", None) or getattr(chat, "username", None) or "канал"
+    loop = asyncio.get_running_loop()
+    note = await loop.run_in_executor(None, call_claude, LEARN_SYSTEM, text, 800)
+    if "НЕТ ПОЛЕЗНОГО" in note or note.startswith("[Ошибка"):
+        return
+    today_notes.append(f"[{chan}]\n{note}")
+    print(f"+ collected from {chan}", flush=True)
 
 
 async def digest_loop():
@@ -110,10 +122,10 @@ async def digest_loop():
         if target <= now:
             target += timedelta(days=1)
         await asyncio.sleep((target - now).total_seconds())
+        loop = asyncio.get_running_loop()
         if today_notes:
             joined = "\n\n".join(today_notes)[:20000]
-            summary = await asyncio.get_event_loop().run_in_executor(
-                None, call_claude, DIGEST_SYS, joined, 1200)
+            summary = await loop.run_in_executor(None, call_claude, DIGEST_SYS, joined, 1200)
             msg = f"☀️ Дайджест за сутки — что нового в каналах:\n\n{summary}"
             today_notes.clear()
         else:
@@ -121,39 +133,28 @@ async def digest_loop():
         try:
             await client.send_message("me", msg[:4000])
         except Exception as e:
-            print("digest send error:", e)
+            print("digest send error:", e, flush=True)
 
 
 async def main():
+    global client
+    client = TelegramClient(StringSession(SESSION), API_ID, API_HASH)
     await client.start()
-    # разрешаем источники, чтобы live-подписка точно ловила
+
     resolved = []
     for s in LEARN_SOURCES:
         try:
-            ent = await client.get_entity(s)
-            resolved.append(ent)
+            resolved.append(await client.get_entity(s))
         except Exception as e:
-            print(f"skip source {s}: {e}")
+            print(f"skip source {s}: {e}", flush=True)
 
-    @client.on(events.NewMessage(chats=resolved))
-    async def on_channel(event):
-        text = event.raw_text or ""
-        if not text.strip():
-            return
-        chat = await event.get_chat()
-        chan = getattr(chat, "title", None) or getattr(chat, "username", None) or "канал"
-        note = await asyncio.get_event_loop().run_in_executor(
-            None, call_claude, LEARN_SYSTEM, text, 800)
-        if "НЕТ ПОЛЕЗНОГО" in note or note.startswith("[Ошибка"):
-            return
-        today_notes.append(f"[{chan}]\n{note}")
-        print(f"+ collected from {chan}")
-
-    print(f"AGET cloud collector running. Sources: {len(resolved)}. Digest at {DIGEST_HOUR}:00 {DIGEST_TZ}.")
-    asyncio.get_event_loop().create_task(digest_loop())
+    client.add_event_handler(on_channel, events.NewMessage(chats=resolved))
+    asyncio.create_task(digest_loop())
+    print(f"AGET cloud collector running. Sources: {len(resolved)}. "
+          f"Digest at {DIGEST_HOUR}:00 {DIGEST_TZ}.", flush=True)
     await client.run_until_disconnected()
 
 
 if __name__ == "__main__":
     threading.Thread(target=run_http, daemon=True).start()
-    asyncio.get_event_loop().run_until_complete(main())
+    asyncio.run(main())
