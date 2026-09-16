@@ -13,11 +13,15 @@ AGET Cloud Collector — круглосуточный сбор из Telegram-к�
 """
 
 import os
+import ssl
 import json
+import smtplib
 import asyncio
 import threading
 import urllib.request
 import urllib.error
+from email.mime.text import MIMEText
+from email.header import Header
 from datetime import datetime, timedelta
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
@@ -32,6 +36,22 @@ MODEL = os.environ.get("ANTHROPIC_MODEL", "claude-3-5-haiku-latest")  # дёше
 DIGEST_HOUR = int(os.environ.get("DIGEST_HOUR", "9"))
 DIGEST_TZ = os.environ.get("DIGEST_TZ", "America/New_York")
 PORT = int(os.environ.get("PORT", "10000"))
+
+# Почта (Вариант 2): куда слать дайджест. Пароль — «App Password» Gmail.
+GMAIL_ADDRESS = os.environ.get("GMAIL_ADDRESS", "")
+GMAIL_APP_PASSWORD = os.environ.get("GMAIL_APP_PASSWORD", "")
+
+
+def send_email(subject, body):
+    """Шлёт письмо самому себе через Gmail SMTP (App Password)."""
+    msg = MIMEText(body, "plain", "utf-8")
+    msg["Subject"] = str(Header(subject, "utf-8"))
+    msg["From"] = GMAIL_ADDRESS
+    msg["To"] = GMAIL_ADDRESS
+    ctx = ssl.create_default_context()
+    with smtplib.SMTP_SSL("smtp.gmail.com", 465, context=ctx, timeout=60) as s:
+        s.login(GMAIL_ADDRESS, GMAIL_APP_PASSWORD)
+        s.sendmail(GMAIL_ADDRESS, [GMAIL_ADDRESS], msg.as_string())
 
 LEARN_SOURCES = [
     "Lab_blog_bot",
@@ -119,18 +139,27 @@ async def digest_loop():
         if target <= now:
             target += timedelta(days=1)
         await asyncio.sleep((target - now).total_seconds())
+        # БЕСПЛАТНО: Claude не зовём. Шлём сырые собранные посты НА ПОЧТУ.
         loop = asyncio.get_running_loop()
+        date = datetime.now().strftime("%Y-%m-%d")
         if today_notes:
-            joined = "\n\n".join(today_notes)[:20000]
-            summary = await loop.run_in_executor(None, call_claude, DIGEST_SYS, joined, 1200)
-            msg = f"☀️ Дайджест за сутки — что нового в каналах:\n\n{summary}"
+            body = (f"Собрано постов за сутки: {len(today_notes)}\n\n"
+                    + "\n\n— — —\n\n".join(today_notes))
             today_notes.clear()
         else:
-            msg = "☀️ Дайджест за сутки: новых материалов из каналов не поступало."
+            body = "За сутки новых постов в каналах не было."
+        subject = f"[AGET-DIGEST] посты за сутки {date}"
         try:
-            await client.send_message("me", msg[:4000])
+            await loop.run_in_executor(None, send_email, subject, body)
+            print("digest emailed", flush=True)
         except Exception as e:
-            print("digest send error:", e, flush=True)
+            print("email error:", e, flush=True)
+            # запасной вариант: если письмо не ушло — кинем в Telegram «Избранное»
+            try:
+                for i in range(0, len(body), 3500):
+                    await client.send_message("me", body[i:i + 3500])
+            except Exception as e2:
+                print("tg fallback error:", e2, flush=True)
 
 
 async def main():
