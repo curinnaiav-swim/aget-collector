@@ -1,0 +1,10 @@
+name: keep-alive
+on:
+  schedule:
+    - cron: '*/10 * * * *'
+  workflow_dispatch:
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - run: curl -s -m 30 https://aget-collector.onrender.com/ || true
