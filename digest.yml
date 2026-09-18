@@ -1,0 +1,41 @@
+name: AGET daily digest
+
+on:
+  schedule:
+    # 12:00 UTC ежедневно = 08:00 по Нью-Йорку летом (EDT) / 07:00 зимой (EST).
+    # Запускаем заранее, чтобы письмо [AGET-DIGEST] точно успело прийти
+    # до Cowork-задачи в 9:30, даже если GitHub Actions немного опоздает.
+    - cron: '0 12 * * *'
+  workflow_dispatch:   # ручной запуск кнопкой
+    inputs:
+      lookback_hours:
+        description: 'За сколько часов взять посты (для «догнать» поставь 48)'
+        required: false
+        default: '48'
+
+concurrency:
+  group: aget-digest
+  cancel-in-progress: false
+
+jobs:
+  digest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install deps
+        run: pip install telethon==1.41.2
+      - name: Run digest
+        env:
+          API_ID: ${{ secrets.API_ID }}
+          API_HASH: ${{ secrets.API_HASH }}
+          AGET_SESSION: ${{ secrets.AGET_SESSION }}
+          GMAIL_ADDRESS: ${{ secrets.GMAIL_ADDRESS }}
+          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+          # По расписанию поле пустое -> берём 24 ч (без задвоений в соседних днях).
+          # При ручном запуске берём то, что ввели в поле (по умолчанию 48 ч).
+          LOOKBACK_HOURS: ${{ github.event.inputs.lookback_hours || '24' }}
+        run: python digest_once.py
